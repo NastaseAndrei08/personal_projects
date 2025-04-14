@@ -1,0 +1,216 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include "a2_helper.h"
+#include <fcntl.h>           
+#include <sys/stat.h>     
+
+#define MAX_THREADS 4
+
+sem_t sem;
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+int t9_2_started = 0;
+int t9_4_ended = 0;
+int active_threads = 0;
+sem_t *sem1;
+sem_t *sem2;
+
+void *thread_function_P9(void *arg) {
+    int thread_id = *(int *)arg;
+
+    pthread_mutex_lock(&mutex);
+    if (thread_id == 2) {
+        info(BEGIN, 9, 2);
+        t9_2_started = 1;
+        pthread_cond_signal(&cond);  // Signal that T9.2 has started
+    }else if(thread_id == 5){
+    	sem_wait(sem2);
+    	info(BEGIN, 9, 5);
+    } 
+    else if (thread_id == 4) {
+        while (!t9_2_started)
+            pthread_cond_wait(&cond, &mutex);  // Wait for T9.2 to start
+        info(BEGIN, 9, 4);
+    } else {
+        info(BEGIN, 9, thread_id);
+    }
+    pthread_mutex_unlock(&mutex);
+
+
+    pthread_mutex_lock(&mutex);
+    if (thread_id == 4) {
+        info(END, 9, 4);
+        t9_4_ended = 1;
+        pthread_cond_signal(&cond);  // Signal that T9.4 has ended
+    } else if (thread_id == 2) {
+        while (!t9_4_ended)
+            pthread_cond_wait(&cond, &mutex);  // Wait for T9.4 to end
+        info(END, 9, 2);
+    }else if(thread_id == 5){
+    	info(END, 9, thread_id);  
+	sem_post(sem1);  
+    }     
+    else {
+        info(END, 9, thread_id);
+    }
+    pthread_mutex_unlock(&mutex);
+
+    return NULL;
+}
+
+void *thread_function_P7(void *arg) {
+    int thread_id = *(int *)arg;
+
+    sem_wait(&sem);  // Limiting the number of threads running simultaneously
+    pthread_mutex_lock(&mutex);
+    active_threads++;
+    pthread_mutex_unlock(&mutex);
+    info(BEGIN, 7, thread_id);
+
+    // Simulate work
+    if (thread_id == 14) {
+        
+    }
+
+    info(END, 7, thread_id);
+
+    pthread_mutex_lock(&mutex);
+    active_threads--;
+    pthread_mutex_unlock(&mutex);
+    sem_post(&sem);
+
+    return NULL;
+}
+
+void* func_p2_threads(void* arg){
+	int th_nr = *(int*)arg;
+	free(arg);
+	
+	if(th_nr == 5){
+		sem_wait(sem1);
+		info(BEGIN,2,th_nr);
+	}
+	else{
+		info(BEGIN,2,th_nr);
+	}
+	
+	
+	
+	if(th_nr == 4){
+		info(END,2,th_nr);
+		sem_post(sem2);
+	}
+	else{
+		info(END,2,th_nr);
+	}
+	
+	return NULL;
+}
+
+int main() {
+    init();
+    info(BEGIN, 1, 0); // Main process starts
+
+    sem_init(&sem, 0, MAX_THREADS);
+    sem1 = sem_open("/semaphore1", O_CREAT, 0644, 0);
+    sem2 = sem_open("/semaphore2", O_CREAT, 0644, 0);
+
+
+    int pid = fork();
+    if (pid == 0) { // This is child P2
+        info(BEGIN, 2, 0);
+        
+        pthread_t threads_p2[5];
+        for(int i=0;i<5;i++){
+        	int *th_nr = malloc(sizeof(int));
+        	*th_nr = i+1;
+        	pthread_create(&threads_p2[i],NULL,func_p2_threads,th_nr);
+        }
+
+	for(int i=0; i<5;i++){
+		pthread_join(threads_p2[i],NULL);
+	}
+
+        if (fork() == 0) { // This is child P3
+            info(BEGIN, 3, 0);
+
+            if (fork() == 0) { // This is child P5
+                info(BEGIN, 5, 0);
+
+                if (fork() == 0) { // This is child P6
+                    info(BEGIN, 6, 0);
+                    info(END, 6, 0);
+                    return 0;
+                }
+                wait(NULL); // Wait for P6 to finish
+                info(END, 5, 0);
+                return 0;
+            }
+
+            if (fork() == 0) { // This is child P9
+                info(BEGIN, 9, 0);
+                
+                pthread_t threads[5];
+                int thread_ids[5] = {1, 2, 3, 4, 5};
+                for (int i = 0; i < 5; i++) {
+                    pthread_create(&threads[i], NULL, thread_function_P9, &thread_ids[i]);
+                }
+                for (int i = 0; i < 5; i++) {
+                    pthread_join(threads[i], NULL);
+                }
+                
+                info(END, 9, 0);
+                return 0;
+            }
+            wait(NULL); // Wait for P9 to finish
+            wait(NULL); // Wait for P5 to finish
+            info(END, 3, 0);
+            return 0;
+        }
+        wait(NULL); // Wait for P3 to finish
+        info(END, 2, 0);
+        return 0;
+    } else { // This is still the root P1
+        if (fork() == 0) { // This is child P4
+            info(BEGIN, 4, 0);
+
+            if (fork() == 0) { // This is child P7
+                info(BEGIN, 7, 0);
+                
+                pthread_t threads[50];
+                int thread_ids[50];
+                for (int i = 0; i < 50; i++) {
+                    thread_ids[i] = i + 1;
+                    pthread_create(&threads[i], NULL, thread_function_P7, &thread_ids[i]);
+                }
+                for (int i = 0; i < 50; i++) {
+                    pthread_join(threads[i], NULL);
+                }
+
+                info(END, 7, 0);
+                return 0;
+            }
+
+            if (fork() == 0) { // This is child P8
+                info(BEGIN, 8, 0);
+                info(END, 8, 0);
+                return 0;
+            }
+
+            wait(NULL); // Wait for P7 to finish
+            wait(NULL); // Wait for P8 to finish
+            info(END, 4, 0);
+            return 0;
+        }
+    }
+
+    wait(NULL); // Wait for P2 to finish
+    wait(NULL); // Wait for P4 to finish
+    info(END, 1, 0); // Main process ends
+    return 0;
+}
