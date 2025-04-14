@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TicketZone</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<header>
+    <div class="logo">TicketZone</div>
+    <nav>
+        <a href="index.html">Home</a>
+        <a href="cart.html">Cart</a>
+    </nav>
+    <div class="search-container">
+        <input type="text" placeholder="Search events..." class="search-bar">
+        <button class="search-button">Search</button>
+    </div>
+    <div class="profile">
+        <a href="login.html">Login</a>
+        <a href="my-tickets.html">My Tickets</a>
+    </div>
+</header>
+
+<main>
+    <h2>Upcoming Events</h2>
+    <div id="events-container" class="event-list">
+        <!-- Dynamic events will load here -->
+    </div>
+</main>
+
+<footer>
+    <p>© 2025 TicketZone. All rights reserved.</p>
+</footer>
+
+<script>
+    document.addEventListener("DOMContentLoaded", () => {
+        const searchInput = document.querySelector(".search-bar");
+        const searchButton = document.querySelector(".search-button");
+        const eventsContainer = document.getElementById("events-container");
+
+        let eventsData = []; // To store fetched events
+
+        const loadEvents = () => {
+            console.log("Fetching events...");
+            fetch('/events')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log("Events loaded:", data);
+                    eventsData = data; // Store events
+                    displayEvents(eventsData);
+                })
+                .catch(error => {
+                    console.error("Error loading events:", error);
+                    eventsContainer.innerHTML = "<p>Failed to load events.</p>";
+                });
+        };
+
+        const displayEvents = (events) => {
+            eventsContainer.innerHTML = "";
+            if (events.length === 0) {
+                eventsContainer.innerHTML = "<p>No events found.</p>";
+                return;
+            }
+            events.forEach(event => {
+                const eventCard = `
+                <div class="event-card">
+                    <h2>${event.title}</h2>
+                    <p><strong>Date:</strong> ${event.date}</p>
+                    <p><strong>Location:</strong> ${event.location}</p>
+                    <a href="event-details.html?id=${event.id}" class="view-details-button">View Details</a>
+                </div>
+            `;
+                eventsContainer.innerHTML += eventCard;
+            });
+        };
+
+        searchButton.addEventListener("click", () => {
+            const query = searchInput.value.toLowerCase();
+            console.log("Search query:", query);
+            const filteredEvents = eventsData.filter(event =>
+                event.title.toLowerCase().includes(query) ||
+                event.location.toLowerCase().includes(query)
+            );
+            console.log("Filtered events:", filteredEvents);
+            displayEvents(filteredEvents);
+        });
+
+        loadEvents();
+    });
+
+</script>
+
+</body>
+</html>

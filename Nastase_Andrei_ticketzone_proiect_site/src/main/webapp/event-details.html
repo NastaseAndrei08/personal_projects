@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Event Details</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<header>
+    <div class="logo">TicketZone</div>
+    <nav>
+        <a href="index.html">Home</a>
+        <a href="cart.html">Cart</a>
+    </nav>
+</header>
+
+<main>
+    <h2 id="event-title">Event Title</h2>
+    <div id="event-details">
+        <p><strong>Date:</strong> <span id="event-date"></span></p>
+        <p><strong>Location:</strong> <span id="event-location"></span></p>
+        <p><strong>Description:</strong> <span id="event-description"></span></p>
+        <img id="event-image" src="" alt="Event Image">
+        <button id="add-to-cart-button" class="button">Add to Cart</button>
+    </div>
+</main>
+
+<script>
+    document.addEventListener("DOMContentLoaded", () => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const eventId = urlParams.get("id");
+
+        if (eventId) {
+            fetch(`/events?id=${eventId}`)
+                .then(response => response.json())
+                .then(event => {
+                    document.getElementById("event-title").innerText = event.title;
+                    document.getElementById("event-date").innerText = event.date;
+                    document.getElementById("event-location").innerText = event.location;
+                    document.getElementById("event-description").innerText = event.description;
+                    document.getElementById("event-image").src = event.image;
+
+                    const addToCartButton = document.getElementById("add-to-cart-button");
+                    addToCartButton.addEventListener("click", () => {
+                        const userId = localStorage.getItem("userId");
+                        if (!userId) {
+                            alert("Please log in to add items to the cart.");
+                            window.location.href = "login.html";
+                            return;
+                        }
+
+                        fetch("/cart", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                            body: `action=add&userId=${userId}&eventId=${eventId}`
+                        })
+                            .then(response => response.json())
+                            .then(result => {
+                                if (result.success) {
+                                    alert("Event added to cart!");
+                                } else {
+                                    alert(result.message);
+                                }
+                            });
+                    });
+                });
+        } else {
+            document.getElementById("event-details").innerHTML = "<p>No event selected.</p>";
+        }
+    });
+</script>
+
+
+</body>
+</html>

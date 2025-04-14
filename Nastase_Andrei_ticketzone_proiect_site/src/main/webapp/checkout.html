@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Checkout</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<header>
+    <div class="logo">TicketZone</div>
+    <nav>
+        <a href="index.html">Home</a>
+        <a href="cart.html">Cart</a>
+    </nav>
+</header>
+
+<main>
+    <h2>Checkout</h2>
+    <form id="checkout-form">
+        <div>
+            <label for="full-name">Full Name:</label>
+            <input type="text" id="full-name" name="fullName" placeholder="Enter your full name" required>
+        </div>
+        <div>
+            <label for="email">Email:</label>
+            <input type="email" id="email" name="email" placeholder="Enter your email" required>
+        </div>
+        <div>
+            <label for="phone">Phone Number:</label>
+            <input type="tel" id="phone" name="phone" placeholder="Enter your phone number" required>
+        </div>
+        <div id="order-summary">
+            <!-- Order summary will be dynamically loaded here -->
+        </div>
+        <button type="submit" class="checkout-button">Complete Purchase</button>
+    </form>
+</main>
+
+<script>
+    document.addEventListener("DOMContentLoaded", () => {
+        const userId = localStorage.getItem("userId");
+        if (!userId) {
+            alert("Please log in to proceed with checkout.");
+            window.location.href = "login.html";
+            return;
+        }
+
+        const orderSummary = document.getElementById("order-summary");
+        const checkoutForm = document.getElementById("checkout-form");
+
+        // Load order summary
+        fetch(`/cart?userId=${userId}`)
+            .then(response => response.json())
+            .then(items => {
+                orderSummary.innerHTML = "<h3>Order Summary</h3>";
+
+                if (items.length === 0) {
+                    orderSummary.innerHTML += "<p>Your cart is empty. Please add items to your cart before checking out.</p>";
+                    return;
+                }
+
+                let totalPrice = 0;
+                items.forEach(item => {
+                    totalPrice += item.price;
+
+                    orderSummary.innerHTML += `
+                        <p><strong>${item.title}</strong>: $${item.price.toFixed(2)}</p>
+                    `;
+                });
+                orderSummary.innerHTML += `<h4>Total: $${totalPrice.toFixed(2)}</h4>`;
+            });
+
+        // Handle form submission
+        checkoutForm.addEventListener("submit", (event) => {
+            event.preventDefault();
+
+            const formData = new URLSearchParams(new FormData(checkoutForm));
+            formData.append("userId", userId);
+
+            fetch("/checkout", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: formData.toString()
+            })
+                .then(response => response.json())
+                .then(result => {
+                    if (result.success) {
+                        alert("Purchase successful! Redirecting to My Tickets...");
+                        window.location.href = "my-tickets.html";
+                    } else {
+                        alert(result.message);
+                    }
+                })
+                .catch(error => {
+                    console.error("Error during checkout:", error);
+                    alert("An error occurred while completing your purchase.");
+                });
+        });
+    });
+</script>
+
+</body>
+</html>

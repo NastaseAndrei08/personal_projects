@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Tickets</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<header>
+    <div class="logo">TicketZone</div>
+    <nav>
+        <a href="index.html">Home</a>
+        <a href="cart.html">Cart</a>
+        <button id="logout-button" class="button">Log Out</button>
+    </nav>
+</header>
+
+<main>
+    <h2>My Tickets</h2>
+    <div id="tickets-container">
+        <!-- Tickets will be dynamically loaded here -->
+    </div>
+</main>
+
+<script>
+    document.addEventListener("DOMContentLoaded", () => {
+        const userId = localStorage.getItem("userId");
+        if (!userId) {
+            alert("Please log in to view your tickets.");
+            window.location.href = "login.html";
+            return;
+        }
+
+        const logoutButton = document.getElementById("logout-button");
+        const isLoggedIn = localStorage.getItem("isLoggedIn") === "true";
+        if (!isLoggedIn) {
+            logoutButton.style.display = "none"; // Hide button if not logged in
+        } else {
+            logoutButton.style.display = "block";
+        }
+        if (logoutButton) {
+            logoutButton.addEventListener("click", () => {
+                // Clear user login state
+                localStorage.removeItem("isLoggedIn");
+                localStorage.removeItem("userId");
+                localStorage.removeItem("isAdmin");
+
+                // Redirect to login page
+                alert("You have been logged out.");
+                window.location.href = "login.html";
+            });
+        }
+
+        // Fetch purchased tickets
+        fetch(`/tickets?userId=${userId}`)
+            .then(response => response.json())
+            .then(tickets => {
+                const ticketsContainer = document.getElementById("tickets-container");
+                ticketsContainer.innerHTML = "";
+
+                if (tickets.length === 0) {
+                    ticketsContainer.innerHTML = "<p>No tickets found.</p>";
+                    return;
+                }
+
+                tickets.forEach(ticket => {
+                    const ticketItem = `
+                        <div class="ticket-item">
+                            <h3>${ticket.title}</h3>
+                            <p><strong>Date:</strong> ${ticket.date}</p>
+                            <p><strong>Location:</strong> ${ticket.location}</p>
+                            <p><strong>Access Code:</strong> ${ticket.accessCode}</p>
+                        </div>
+                    `;
+                    ticketsContainer.innerHTML += ticketItem;
+                });
+            })
+            .catch(error => {
+                console.error("Error loading tickets:", error);
+                const ticketsContainer = document.getElementById("tickets-container");
+                ticketsContainer.innerHTML = "<p>Failed to load tickets.</p>";
+            });
+    });
+</script>
+
+</body>
+</html>
