@@ -1,0 +1,389 @@
+version: "3.9"
+
+services:
+  # =======================
+  # Frontend
+  # =======================
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    networks:
+      - proxy
+    depends_on:
+      - traefik
+
+
+  simulator-1:
+    build: ./simulator
+    container_name: simulator-1
+    environment:
+      - RABBIT_HOST=rabbitmq
+      - DEVICE_ID=6bf4681f-b807-4a50-bdde-134320eda6fb
+    depends_on:
+      - rabbitmq
+    networks:
+      - backend
+    restart: "no"
+
+    # 5. Simulator B
+  simulator-2:
+    build: ./simulator
+    container_name: simulator-2
+    environment:
+      - RABBIT_HOST=rabbitmq
+      - DEVICE_ID=19385be4-80e5-4357-9fe6-9bdf9843649e
+    depends_on:
+      - rabbitmq
+    networks:
+      - backend
+    restart: "no"
+
+  # =======================
+  # Reverse Proxy + API Gateway
+  # =======================
+  traefik:
+    image: traefik:v3.1
+    command:
+      - --api.insecure=true
+      - --providers.docker=true
+      - --entrypoints.web.address=:80
+    ports:
+      - "${PUBLIC_HTTP_PORT:-8080}:80"   # external HTTP port (default 8080)
+      - "8081:8080"                      # Traefik dashboard (optional)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - m1
+    networks:
+      - proxy
+      - backend
+    labels:
+      - traefik.enable=true
+
+      # ---------- ForwardAuth: call M1 to validate JWT ----------
+      - traefik.http.middlewares.auth-forward.forwardauth.address=http://m1:${M1_PORT:-8080}/api/auth/validate
+      - traefik.http.middlewares.auth-forward.forwardauth.authRequestHeaders=Authorization
+      # headers that M1 will set and Traefik will forward to M2/M3
+      - traefik.http.middlewares.auth-forward.forwardauth.authResponseHeaders=X-User-Name,X-User-Role
+      - traefik.http.middlewares.auth-forward.forwardauth.trustForwardHeader=true
+
+      # ---------- Strip fake X-User-* headers from clients ----------
+      - traefik.http.middlewares.strip-auth-headers.headers.customrequestheaders.X-User-Name=
+      - traefik.http.middlewares.strip-auth-headers.headers.customrequestheaders.X-User-Role=
+
+      # ---------- CORS for frontend (adjust origin if needed) ----------
+      - traefik.http.middlewares.cors-allow-frontend.headers.accessControlAllowOriginList=http://localhost:3000
+      - traefik.http.middlewares.cors-allow-frontend.headers.accessControlAllowMethods=GET,POST,PUT,DELETE,OPTIONS
+      - traefik.http.middlewares.cors-allow-frontend.headers.accessControlAllowHeaders=Authorization,Content-Type,Accept
+      - traefik.http.middlewares.cors-allow-frontend.headers.accessControlAllowCredentials=true
+      - traefik.http.middlewares.cors-allow-frontend.headers.addVaryHeader=true
+      - traefik.http.middlewares.cors-allow-frontend.headers.accessControlExposeHeaders=X-User-Name,X-User-Role
+
+  # =======================
+  # Databases
+  # =======================
+
+  auth-db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=${AUTH_DB:-auth_db}
+      - POSTGRES_USER=${PG_USER:-postgres}
+      - POSTGRES_PASSWORD=${PG_PASS:-postgres}
+    volumes:
+      - auth-data:/var/lib/postgresql/data
+    networks:
+      - backend
+
+  user-db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=${USER_DB:-user_db}
+      - POSTGRES_USER=${PG_USER:-postgres}
+      - POSTGRES_PASSWORD=${PG_PASS:-postgres}
+    volumes:
+      - user-data:/var/lib/postgresql/data
+    networks:
+      - backend
+
+  device-db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=${DEVICE_DB:-device_db}
+      - POSTGRES_USER=${PG_USER:-postgres}
+      - POSTGRES_PASSWORD=${PG_PASS:-postgres}
+    volumes:
+      - device-data:/var/lib/postgresql/data
+    networks:
+      - backend
+
+
+  monitoring-db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=monitoring_db
+      - POSTGRES_USER=${PG_USER:-postgres}
+      - POSTGRES_PASSWORD=${PG_PASS:-postgres}
+    volumes:
+      - monitoring-data:/var/lib/postgresql/data
+    networks:
+      - backend
+
+  # =======================
+  # RabbitMQ (Message Broker)
+  # =======================
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"   # Main protocol port
+      - "15672:15672" # Dashboard UI
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =======================
+  # M1 - Auth Service
+  # =======================
+  m1:
+    build: ./M1
+    environment:
+      - SPRING_PROFILES_ACTIVE=default
+      - PORT=${M1_PORT:-8080}
+      - DB_IP=auth-db
+      - DB_PORT=5432
+      - DB_USER=${PG_USER:-postgres}
+      - DB_PASSWORD=${PG_PASS:-postgres}
+      - DB_DBNAME=${AUTH_DB:-auth_db}
+      - JWT_SECRET=${JWT_SECRET:-dev-super-secret-change-me}
+      - JWT_HOURS=${JWT_HOURS:-2}
+    depends_on:
+      - auth-db
+    expose:
+      - "${M1_PORT:-8080}"
+    networks:
+      - proxy
+      - backend
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+
+      # /api/auth/** goes to M1 (no auth-forward here)
+      - traefik.http.routers.auth.rule=PathPrefix(`/api/auth`)
+      - traefik.http.routers.auth.entrypoints=web
+      - traefik.http.routers.auth.middlewares=cors-allow-frontend@docker
+      - traefik.http.services.auth.loadbalancer.server.port=${M1_PORT:-8080}
+
+  # =======================
+  # M2 - User Service
+  # =======================
+  m2:
+    build: ./M2
+    environment:
+      - SPRING_PROFILES_ACTIVE=default
+      - PORT=${M2_PORT:-8080}
+      - DB_IP=user-db
+      - DB_PORT=5432
+      - DB_USER=${PG_USER:-postgres}
+      - DB_PASSWORD=${PG_PASS:-postgres}
+      - DB_DBNAME=${USER_DB:-user_db}
+      - RABBIT_HOST=rabbitmq
+      - RABBIT_PORT=5672
+    depends_on:
+      user-db:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    expose:
+      - "${M2_PORT:-8080}"
+    networks:
+      - proxy
+      - backend
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+
+      # /api/users/** -> M2, protected via auth-forward (JWT required)
+      - traefik.http.routers.users.rule=PathPrefix(`/api/users`)
+      - traefik.http.routers.users.entrypoints=web
+      - traefik.http.routers.users.middlewares=cors-allow-frontend@docker,strip-auth-headers@docker,auth-forward@docker
+      - traefik.http.services.users.loadbalancer.server.port=${M2_PORT:-8080}
+
+  # =======================
+  # M3 - Device Service
+  # =======================
+  m3:
+    build: ./M3
+    environment:
+      - SPRING_PROFILES_ACTIVE=default
+      - PORT=${M3_PORT:-8080}
+      - DB_IP=device-db
+      - DB_PORT=5432
+      - DB_USER=${PG_USER:-postgres}
+      - DB_PASSWORD=${PG_PASS:-postgres}
+      - DB_DBNAME=${DEVICE_DB:-device_db}
+      - RABBIT_HOST=rabbitmq
+      - RABBIT_PORT=5672
+    depends_on:
+      device-db:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    expose:
+      - "${M3_PORT:-8080}"
+    networks:
+      - proxy
+      - backend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+
+      # Router 1: Admin API ( /api/devices )
+      - "traefik.http.routers.devices.rule=PathPrefix(`/api/devices`)"
+      - "traefik.http.routers.devices.entrypoints=web"
+      - "traefik.http.routers.devices.middlewares=cors-allow-frontend@docker,strip-auth-headers@docker,auth-forward@docker"
+      - "traefik.http.services.devices.loadbalancer.server.port=${M3_PORT:-8080}"
+
+      # Router 2: My Devices API ( /api/my )
+      - "traefik.http.routers.mydevices.rule=PathPrefix(`/api/my`)"
+      - "traefik.http.routers.mydevices.entrypoints=web"
+      - "traefik.http.routers.mydevices.middlewares=cors-allow-frontend@docker,strip-auth-headers@docker,auth-forward@docker"
+      # Note: We reuse the same service 'devices' defined above implicitly by Traefik
+
+
+    # =========================================
+  # M4 - Replica 1
+  # =========================================
+  m4-replica-1:
+    build: ./M4
+    container_name: m4-replica-1
+    environment:
+      - SPRING_PROFILES_ACTIVE=default
+      - PORT=8080
+      # --- Restored DB Settings ---
+      - DB_IP=monitoring-db
+      - DB_PORT=5432
+      - DB_USER=${PG_USER:-postgres}
+      - DB_PASSWORD=${PG_PASS:-postgres}
+      - DB_DBNAME=monitoring_db
+      # --- Restored Rabbit Settings ---
+      - RABBIT_HOST=rabbitmq
+      - RABBIT_PORT=5672
+      # --- THE ONLY DIFFERENCE ---
+      - MONITORING_QUEUE_NAME=sensor_queue_0
+    depends_on:
+      monitoring-db:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - proxy
+      - backend
+    labels:
+      # --- Exact Copy of your original M4 Labels ---
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      # Router name 'monitoring' is shared by both replicas
+      - "traefik.http.routers.monitoring.rule=PathPrefix(`/api/monitoring`)"
+      - "traefik.http.routers.monitoring.entrypoints=web"
+      - "traefik.http.routers.monitoring.middlewares=cors-allow-frontend@docker,strip-auth-headers@docker,auth-forward@docker"
+      - "traefik.http.services.monitoring.loadbalancer.server.port=8080"
+
+  # =========================================
+  # M4 - Replica 2
+  # =========================================
+  m4-replica-2:
+    build: ./M4
+    container_name: m4-replica-2
+    environment:
+      - SPRING_PROFILES_ACTIVE=default
+      - PORT=8080
+      - DB_IP=monitoring-db
+      - DB_PORT=5432
+      - DB_USER=${PG_USER:-postgres}
+      - DB_PASSWORD=${PG_PASS:-postgres}
+      - DB_DBNAME=monitoring_db
+      - RABBIT_HOST=rabbitmq
+      - RABBIT_PORT=5672
+      # --- THE ONLY DIFFERENCE ---
+      - MONITORING_QUEUE_NAME=sensor_queue_1
+    depends_on:
+      monitoring-db:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - proxy
+      - backend
+    labels:
+      # --- Exact Copy of your original M4 Labels ---
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      # Sharing the same router name merges them into one backend service for Traefik
+      - "traefik.http.routers.monitoring.rule=PathPrefix(`/api/monitoring`)"
+      - "traefik.http.routers.monitoring.entrypoints=web"
+      - "traefik.http.routers.monitoring.middlewares=cors-allow-frontend@docker,strip-auth-headers@docker,auth-forward@docker"
+      - "traefik.http.services.monitoring.loadbalancer.server.port=8080"
+
+  # =======================
+  # M5 - WebSocket & Chat Service
+  # =======================
+  m5:
+    build: ./M5
+    environment:
+      - PORT=8080
+      - RABBIT_HOST=rabbitmq
+      - GEMINI_API_KEY=AIzaSyCDQRrTaw9109evIJrZ3xaCQuAL9HZ3b5A
+    depends_on:
+      - rabbitmq
+    expose:
+      - "8080"
+    networks:
+      - proxy
+      - backend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+
+      # Route for WebSocket (/ws/**)
+      # We need special handling for Sticky Sessions usually,
+      # but for simple usage this often works directly.
+      - "traefik.http.routers.chat.rule=PathPrefix(`/ws`)"
+      - "traefik.http.routers.chat.entrypoints=web"
+      - "traefik.http.routers.chat.middlewares=cors-allow-frontend@docker"
+      - "traefik.http.services.chat.loadbalancer.server.port=8080"
+
+  m6-loadbalancer:
+    build: ./M6
+    container_name: load-balancer
+    environment:
+      - SERVER_PORT=8080
+      - RABBIT_HOST=rabbitmq
+      - APP_REPLICA_COUNT=2
+    depends_on:
+      - rabbitmq
+    networks:
+      - backend
+
+# =======================
+# Networks & Volumes
+# =======================
+networks:
+  proxy:
+  backend:
+
+volumes:
+  auth-data:
+  user-data:
+  device-data:
+  rabbitmq_data:
+  monitoring-data:
